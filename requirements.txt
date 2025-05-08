@@ -1,0 +1,5 @@
+airbyte
+openpyxl
+pandas
+plotly
+streamlit
