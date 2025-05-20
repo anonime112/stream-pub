@@ -1,0 +1,29 @@
+modules = ["python-3.12", "web"]
+run = "streamlit run main.py"
+
+[nix]
+channel = "stable-24_05"
+packages = ["glibcLocales", "deepin.dwayland", "jdk17"]
+
+[deployment]
+run = ["sh", "-c", "streamlit run main.py"]
+
+[[ports]]
+localPort = 8501
+externalPort = 80
+
+[[ports]]
+localPort = 8502
+externalPort = 3000
+
+[[ports]]
+localPort = 8503
+externalPort = 3001
+
+[[ports]]
+localPort = 8504
+externalPort = 3002
+
+[[ports]]
+localPort = 8505
+externalPort = 3003

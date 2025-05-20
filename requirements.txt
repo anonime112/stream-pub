@@ -3,3 +3,7 @@ openpyxl
 pandas
 plotly
 streamlit
+language-tool-python
+numpy
+spacy
+textstat
