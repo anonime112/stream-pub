@@ -7,3 +7,5 @@ language-tool-python
 numpy
 spacy
 textstat
+plotly
+openpyxl
