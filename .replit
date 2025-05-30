@@ -1,9 +1,9 @@
-modules = ["python-3.12", "web"]
+modules = ["python-3.11", "python-3.12", "web"]
 run = "streamlit run main.py"
 
 [nix]
 channel = "stable-24_05"
-packages = ["glibcLocales", "deepin.dwayland", "jdk17"]
+packages = ["glibcLocales", "deepin.dwayland", "jdk17", "python312Packages.virtualenv", "wget"]
 
 [deployment]
 run = ["sh", "-c", "streamlit run main.py"]

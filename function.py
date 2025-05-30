@@ -27,6 +27,15 @@ mots_flous = set([
     "pertinent", "approprié", "bon fonctionnement"
 ])
 
+verbes_facilitants = [
+    "mettre en place", "vérifier", "sécuriser", "formaliser", "documenter",
+    "renforcer", "centraliser", "supprimer", "auditer", "remédier", "corriger",
+    "justifier", "s'assurer", "établir", "limiter", "instaurer", "réaliser",
+    "clarifier", "régulariser", "identifier", "rédiger", "modifier",
+    "procéder à", "activer", "concevoir", "diffuser", "revoir", "déployer",
+    "mettre à jour", "implémenter", "élaborer", "contrôler", "étayer"
+]
+
 ressources_keywords = [
     "ordinateur", "logiciel", "application", "formulaire", "fichier",
     "document", "base de données", "matériel", "réseau", "support",
@@ -45,37 +54,57 @@ Nous recommandons aux :
 """
 
 
+def evaluer_faisabilite(tache):
+    a = evaluer_complexite(tache)
+    b = evaluer_difficulte_tache(tache)
+    a = evaluer_complexite(tache)
 
 
-def AnalyseTache(taches):
-    for tache in taches:
-        doc = nlp(tache)
-
-        # --- Clarté : test de lisibilité + fautes de grammaire ---
-        lisibilite = textstat.flesch_reading_ease(tache)
-
-        fautes = tool.check(tache)
-        nb_fautes = len(fautes)
-        clarte_score = max(0, min(1, (lisibilite - 30) / 70))  # normalisé entre 0 et 1
-
-        # --- Spécificité : on vérifie le nombre de noms et adjectifs concrets ---
-        noms_specifiques = [token for token in doc if token.pos_ in ["NOUN", "PROPN", "ADJ"]]
-        specificite_score = min(1.0, len(noms_specifiques) / 4)
-
-        # --- Ressources citées : objets, personnes, lieux, outils... ---
-        ressources = [ent.text for ent in doc.ents if ent.label_ in ["MISC", "ORG", "PERSON", "LOC", "PRODUCT"]]
-        ressources_score = 1.0 if ressources or any(t.pos_ == "NOUN" for t in doc) else 0.0
-
-        print(f"🧾 Tâche : {tache}")
-        print(f"  - Score de clarté       : {clarte_score:.2f} (Fautes: {nb_fautes})")
-        print(f"  - Score de spécificité  : {specificite_score:.2f} ({len(noms_specifiques)} éléments)")
-        print(f"  - Ressources détectées  : {ressources if ressources else 'aucune'} → Score: {ressources_score:.2f}")
-        print("")
+def normaliser(val, max_val):
+    return max(0, min(100, 100 - (val / max_val) * 100))
 
 
+def score_comprehension(texte: str) -> dict:
+    doc = nlp(texte)
+    phrases = list(doc.sents)
+    nb_phrases = len(phrases)
+    nb_tokens = len([token for token in doc if token.is_alpha])
 
+    longueur_moyenne = nb_tokens / nb_phrases if nb_phrases else 0
 
+    nb_subordonnees = 0
+    nb_passives = 0
+    for token in doc:
+        if "sub" in token.dep_:
+            nb_subordonnees += 1
+        if token.dep_ == "aux:pass":
+            nb_passives += 1
 
+    complexite = nb_subordonnees + nb_passives
+    mots_difficiles = textstat.difficult_words(texte)
+    score_lisibilite = max(0, min(100, textstat.flesch_reading_ease(texte)))
+
+    # Normalisation (à partir de seuils arbitraires raisonnables)
+    score_longueur = normaliser(longueur_moyenne,
+                                30)  # seuil max : 30 mots/phrase
+    score_complexite = normaliser(complexite,
+                                  10)  # seuil max : 10 sub/passives
+    score_vocabulaire = normaliser(mots_difficiles,
+                                   15)  # seuil max : 15 mots difficiles
+
+    # Moyenne pondérée
+    score_global = round((0.25 * score_longueur + 0.25 * score_complexite +
+                          0.25 * score_vocabulaire + 0.25 * score_lisibilite),
+                         2)
+
+    return {
+        "longueur_moyenne": round(longueur_moyenne, 2),
+        "nb_subordonnees": nb_subordonnees,
+        "nb_passives": nb_passives,
+        "mots_difficiles": mots_difficiles,
+        "score_lisibilite": score_lisibilite,
+        "score_global_comprehension": score_global
+    }
 
 
 def evaluer_comprehension(texte):
@@ -117,6 +146,81 @@ def evaluer_complexite(tache):
     return score
 
 
+def AnalyseTache(taches):
+    for tache in taches:
+        doc = nlp(tache)
+
+        # --- Clarté : test de lisibilité + fautes de grammaire ---
+        lisibilite = textstat.flesch_reading_ease(tache)
+
+        fautes = tool.check(tache)
+        nb_fautes = len(fautes)
+        clarte_score = max(0, min(1, (lisibilite - 30) /
+                                  70))  # normalisé entre 0 et 1
+
+        # --- Spécificité : on vérifie le nombre de noms et adjectifs concrets ---
+        noms_specifiques = [
+            token for token in doc if token.pos_ in ["NOUN", "PROPN", "ADJ"]
+        ]
+        specificite_score = min(1.0, len(noms_specifiques) / 4)
+
+        # --- Ressources citées : objets, personnes, lieux, outils... ---
+        ressources = [
+            ent.text for ent in doc.ents
+            if ent.label_ in ["MISC", "ORG", "PERSON", "LOC", "PRODUCT"]
+        ]
+        ressources_score = 1.0 if ressources or any(t.pos_ == "NOUN"
+                                                    for t in doc) else 0.0
+
+        print(f"🧾 Tâche : {tache}")
+        print(
+            f"  - Score de clarté       : {clarte_score:.2f} (Fautes: {nb_fautes})"
+        )
+        print(
+            f"  - Score de spécificité  : {specificite_score:.2f} ({len(noms_specifiques)} éléments)"
+        )
+        print(
+            f"  - Ressources détectées  : {ressources if ressources else 'aucune'} → Score: {ressources_score:.2f}"
+        )
+        print("")
+        acteurs = set()
+        actions = set()
+        ressources = set()
+
+        for chunk in doc.noun_chunks:
+            print("Groupe nominal :", chunk.text)
+
+            texte = chunk.text.strip()
+
+            # Acteurs probables (par heuristique : contient "Manager", "Direction", etc.)
+            if any(mot in texte.lower() for mot in
+                   ["manager", "direction", "responsable", "service"]):
+                acteurs.add(texte)
+        # Ressources probables
+            elif any(mot in texte.lower() for mot in [
+                    "contrôle", "état", "transmission", "provision", "charge",
+                    "perte"
+            ]):
+                ressources.add(texte)
+
+        for token in doc:
+            if token.dep_ in ("nsubj", "nmod", "pobj",
+                              "appos") and token.pos_ in ("PROPN", "NOUN"):
+                acteurs.add(token.text)
+            if token.pos_ == "VERB":
+                actions.add(token.lemma_)  # le verbe à l'infinitif
+            if token.dep_ in ("obj", "obl",
+                              "nmod") and token.pos_ in ("NOUN", "PROPN"):
+                ressources.add(token.text)
+
+        print("🔸 Phrase analysée :", tache)
+        print("👤 Personnes concernées :", ", ".join(acteurs)
+              or "Aucune trouvée")
+        print("✅ Verbes d’action :", ", ".join(actions) or "Aucun trouvé")
+        print("📦 Ressources associées :", ", ".join(ressources)
+              or "Aucune trouvée")
+
+
 def extraire_taches(texte: str) -> list[str]:
     """
     Extrait les tâches d'un texte en détectant les phrases qui contiennent
@@ -146,37 +250,42 @@ def evaluer_difficulte_tache(tache: str) -> dict:
     doc = nlp(tache)
     score = 0
     facteurs = []
+    texte_min = tache.lower()
 
-    # 1. Mots abstraits ou techniques
+    # 1. Mots abstraits et verbes techniques = difficulté ↑
     for token in doc:
-        if token.lemma_.lower() in mots_abstraits:
+        lemma = token.lemma_.lower()
+        if lemma in mots_abstraits:
             score += 15
-            facteurs.append("mot abstrait : " + token.text)
-        elif token.lemma_.lower() in verbes_techniques:
+            facteurs.append(f"mot abstrait : {token.text}")
+        elif lemma in verbes_techniques:
             score += 20
-            facteurs.append("verbe technique : " + token.text)
 
-    # 2. Absence de ressource
-    if not any(r in tache.lower() for r in ressources_keywords):
+    # 2. Verbes facilitants = difficulté ↓
+    for verbe in verbes_facilitants:
+        if verbe in texte_min:
+            score -= 10
+    # 3. Ressources mentionnées ?
+    if not any(r in texte_min for r in ressources_keywords):
         score += 10
-        facteurs.append("aucune ressource mentionnée")
-
-    # 3. Présence de subordonnants (conditions ou dépendances)
-    if any(s in tache.lower() for s in subordonnants):
+    # 4. Subordonnants = complexité syntaxique ↑
+    if any(s in texte_min for s in subordonnants):
         score += 10
-        facteurs.append("phrase conditionnelle ou complexe")
 
-    # 4. Longueur de phrase
-    if len(doc) > 15:
+    # 5. Longueur de la phrase
+    if len(doc) > 20:
         score += 10
-        facteurs.append("phrase longue")
 
-    # Score plafonné à 100
+    # 6. Nombre de mots difficiles (selon textstat)
+    nb_difficiles = textstat.difficult_words(tache)
+    score += nb_difficiles * 2  # pondération ajustable
+    if nb_difficiles > 0:
+        facteurs.append(f"{nb_difficiles} mots difficiles")
 
     difficiles = textstat.difficult_words(tache)
     score = score + difficiles
 
-    return {"score_difficulte": score, "facteurs": facteurs}
+    return score
 
 
 taches = extraire_taches(texte)
@@ -187,10 +296,10 @@ for t in taches:
     print(f"🧾 Tâche : {t}")
     print(f"  - Score de complexité : {s:.2f} → Niveau : {niveau}\n")
     resultat = evaluer_difficulte_tache(t)
-    difficiles = textstat.difficult_words(t)
-    print(f"Mots difficiles détectés : {difficiles}")
-    for m in resultat:
-        print(f"{m}: {resultat[m]}")
+    print(f"  -score_difficulte : {resultat:.2f} → Niveau : {niveau}\n")
+
+    # for m in resultat:
+    #   print(f"{m}: {resultat[m]}")
 
     print(f"------------------------------------------------------------")
 
@@ -198,5 +307,10 @@ score = evaluer_comprehension(texte)
 niveau = "Faible" if score < 0.3 else "Moyenne" if score < 0.7 else "Bonne"
 print(f"------------------------------------------------------------")
 print(f"📝 Compréhension du texte : Score = {score:.2f} → Niveau : {niveau}")
+comp = score_comprehension(texte)
+for m in comp:
+    print(f"{m}: {comp[m]}")
+print(f"------------------------------------------------------------")
+print(f"------analyse de la tache------")
+# AnalyseTache(taches)
 
-AnalyseTache(taches)

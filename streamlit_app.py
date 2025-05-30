@@ -8,6 +8,8 @@ from itertools import islice
 from plotly.subplots import make_subplots
 import os
 import unicodedata
+import re
+from function import score_comprehension
 
 ##################################################################
 ### Configure App
@@ -19,9 +21,34 @@ stat_contro2 = ['Cloturé']
 priorite_enum = ['Importante', 'moyenne', 'Haute']
 criticite_enum = ['Elevée', 'Modérée', 'Critique', 'Faible']
 colonne = [
-    'criticité reco', 'statut de mise en oeuvre', 'écheance initiale',
-    'écheance revisée', 'priorité pa', '% avancement'
+    'criticité reco', 'statut de mise en œuvre', 'écheance initiale',
+    'écheance revisée', 'priorité pa', '% avancement', 'Date de clôture',
+    'ID Recommandation', 'Recommandation', 'Date de clôture', 'Plan dactions ',
+    'ID Plan dactions', 'RMO', 'Nb. Reports', 'Nb. Suivis réalisés','Date démission rapport'
 ]
+
+mapping_criticite= {
+    "Modérée": 0,
+    "Critique": 1,
+    "Elevée": 2,
+    "Faible": 3
+}
+
+def difference_mois(date1, date2):
+    """Calcule le nombre de mois entre deux colonnes de dates"""
+    return (date2.dt.year - date1.dt.year) * 12 + (date2.dt.month - date1.dt.month)
+def difference_jours(date1, date2):
+    # Convertir en datetime si ce sont des chaînes
+    if isinstance(date1, str):
+        date1 = pd.to_datetime(date1, dayfirst=True, errors='coerce')
+    if isinstance(date2, str):
+        date2 = pd.to_datetime(date2, dayfirst=True, errors='coerce')
+
+    if pd.isnull(date1) or pd.isnull(date2):
+        return None  # ou tu peux lever une erreur selon ton besoin
+
+    delta = date2 - date1
+    return delta.days
 
 
 def comparer_a_aujourdhui(date_str, format_date=None):
@@ -94,12 +121,16 @@ def convertir_dates(df, col):
 
 
 def normaliser_texte(texte):
+    texte = str(texte)
     if pd.isna(texte):
         return ""
-    texte_normalise = unicodedata.normalize('NFD', str(texte))
-    texte_sans_accents = ''.join(c for c in texte_normalise
-                                 if unicodedata.category(c) != 'Mn')
-    return texte_sans_accents.lower()
+    texte = unicodedata.normalize('NFD', str(texte))
+    texte = ''.join(c for c in texte if unicodedata.category(c) != 'Mn')
+    texte = re.sub(r"[’'`]", "", texte)  # apostrophes → _
+    texte = re.sub(r"[-\s]+", "", texte)  # tirets et espaces → _
+    texte = re.sub(r"[^\w_]", "",
+                   texte)  # supprimer tout sauf lettres, chiffres, underscore
+    return texte.lower()
 
 
 def remplacer_variantes(df, colonne, enumeration):
@@ -350,9 +381,29 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     # Assumons que les colonnes à additionner sont les 4e et 5e (index 3 et 4 en Python)
     colonne_4 = df.columns[3]
     colonne_5 = df.columns[4]
+    # Vérifie que les colonnes existent
+    df["Date d'émission rapport"] = pd.to_datetime(df["Date d'émission rapport"], errors="coerce")
+    df["Échéance initiale"] = pd.to_datetime(df["Échéance initiale"], errors="coerce")
+
+
+
 
     # Calcul de la somme et création d'une nouvelle colonne "Somme"
     df[nom_colonne] = df[colonne_4] + df[colonne_5]
+    df["score_comprehension"] = df["Recommandation"].apply(
+        lambda t: score_comprehension(t)["score_global_comprehension"])
+
+
+    # Calcul vectorisé
+    df["nbr_jour_realisation"] = (df["Échéance initiale"] - df["Date d'émission rapport"]).dt.days
+
+    # Appliquer la fonction
+    df["nbr_mois"] = difference_mois(df["Date d'émission rapport"], df["Échéance initiale"])
+
+    # Extraire le mois sous forme de nombre (1 à 12)
+    df["mois_emission"] = df["Date d'émission rapport"].dt.month
+
+    df["criticite_code"] = df["Criticité reco"].map(mapping_criticite)
 
     # Fonction pour colorier la nouvelle colonne
     def colorier(val):
@@ -361,10 +412,12 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     # Appliquer le style sur la colonne "Somme"
     cols = st.columns([6, 1])
 
-    styled_df = df.style.applymap(colorier, subset=[nom_colonne])
+    styled_df = df.style.applymap(colorier,
+                                  subset=[nom_colonne, "Recommandation",
+                                          "nbr_jour_realisation","mois_emission"])
 
     st.success(
-        f"Colonne '{nom_colonne}' ajoutée avec la somme de {colonnes_numeriques[:2]}"
+        f"Colonne '{[nom_colonne, "Recommandation","nbr_jour_realisation"]}' ajoutée avec la somme de {colonnes_numeriques[:2]}"
     )
 
     event = st.dataframe(styled_df,
@@ -378,6 +431,10 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
         if selected_row["rows"][0]:
             selected_row_index = selected_row["rows"][0]
             st.write(df.loc[selected_row_index])
+            valeur_ville = df.loc[selected_row_index, nom_colonne]
+            st.success(
+                f"Valeur sélectionnée dans la colonne 'Ville' : {valeur_ville}"
+            )
 
     # edited_df = st.data_editor(styled_df,
     #                            num_rows="dynamic",
@@ -514,8 +571,7 @@ def display_symbol_history(ticker_df, history_dfs):
     history_df = history_df.set_index("Date")
     mapping_period = {"Week": 7, "Month": 31, "Trimester": 90, "Year": 365}
     today = datetime.today().date()
-    history_df = history_df[(
-        today - pd.Timedelta(mapping_period[selected_period], unit="d")):today]
+    history_df = history_df[(  today - pd.Timedelta(mapping_period[selected_period], unit="d")):today]
 
     for c in ["Open", "High", "Low", "Close", "Volume"]:
         history_df[c] = pd.to_numeric(history_df[c])
@@ -675,7 +731,16 @@ if uploaded_files is not None:
     st.subheader("Colonnes et types de données :")
     with st.expander("list"):
         for name, dtype in get_column_info(uploaded_files):
-            st.write(f"- **{name}** : {dtype}")
+            nom_normalise = normaliser_texte(name)
+
+            if nom_normalise in [normaliser_texte(col) for col in colonne]:
+                st.markdown(
+                    f"<span style='color:#FF8C00'><b>{name}</b> : {dtype}</span>",
+                    unsafe_allow_html=True)
+            else:
+                st.write(f"- **{name}** : {dtype}")
+        # for name, dtype in get_column_info(uploaded_files):
+        #     st.write(f"- **{name}** : {dtype}")
 
     # with st.expander("list"):
     #     afficher_types_colonnes(dfs)
@@ -684,6 +749,14 @@ if uploaded_files is not None:
         afficher_types_colonnes_strict(dfs)
 
         st.subheader("nettoyage de donnees  :")
+
+
+        try:
+            dfs["Échéance initiale"] = pd.to_datetime(dfs["Échéance initiale"], errors="coerce", dayfirst=True)  # ou dayfirst=False selon le format
+            st.success("Colonne 'Date' convertie en datetime.")
+            afficher_types_colonnes_strict(dfs)
+        except Exception as e:
+            st.error(f"Erreur de conversion : {e}")
         message = st.text_area("Message",
                                value="Lorem ipsum.\nStreamlit is cool.")
         if st.button("Prepare download"):
@@ -697,7 +770,15 @@ if uploaded_files is not None:
             )
 
     # Vérification
-    colonnes_absentes = [col for col in colonne if col not in dfs.columns]
+    # Normaliser les colonnes du DataFrame et celles attendues
+    colonnes_df_normalisees = [normaliser_texte(col) for col in dfs.columns]
+    colonnes_requises_normalisees = [normaliser_texte(col) for col in colonne]
+
+    # Vérification des colonnes absentes
+    colonnes_absentes = [
+        col for col in colonnes_requises_normalisees
+        if normaliser_texte(col) not in colonnes_df_normalisees
+    ]
 
     if colonnes_absentes:
         st.error(
