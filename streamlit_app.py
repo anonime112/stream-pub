@@ -33,6 +33,12 @@ mapping_criticite= {
     "Elevée": 2,
     "Faible": 3
 }
+mapping_statut= {
+    "En cours": 3,
+    "Non entamé": 1,
+    "Clôturé": 2,
+    
+}
 
 def difference_mois(date1, date2):
     """Calcule le nombre de mois entre deux colonnes de dates"""
@@ -51,6 +57,31 @@ def difference_jours(date1, date2):
     return delta.days
 
 
+def nombre_trimestres(date_debut, date_fin):
+    """
+    Calcule le nombre de trimestres entre deux dates.
+
+    Args:
+        date_debut (str ou datetime) : Date de début (format 'YYYY-MM-DD' ou datetime)
+        date_fin (str ou datetime)   : Date de fin (format 'YYYY-MM-DD' ou datetime)
+
+    Returns:
+        int : Nombre de trimestres entre les deux dates
+    """
+    # Conversion si la date est en string
+    if isinstance(date_debut, str):
+        date_debut = datetime.strptime(date_debut, "%Y-%m-%d")
+    if isinstance(date_fin, str):
+        date_fin = datetime.strptime(date_fin, "%Y-%m-%d")
+
+    # Calcul des indices de trimestre (de 0 à 3)
+    trimestre_debut = (date_debut.month - 1) // 3
+    trimestre_fin = (date_fin.month - 1) // 3
+
+    # Nombre total de trimestres
+    nb_trimestres = (date_fin.year - date_debut.year) * 4 + (trimestre_fin - trimestre_debut)
+
+    return nb_trimestres
 def comparer_a_aujourdhui(date_str, format_date=None):
     try:
         # Convertir en objet Timestamp de pandas
@@ -385,17 +416,24 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     df["Date d'émission rapport"] = pd.to_datetime(df["Date d'émission rapport"], errors="coerce")
     df["Échéance initiale"] = pd.to_datetime(df["Échéance initiale"], errors="coerce")
 
-
+    # On encode la colonne 'service'
+    encodage = pd.get_dummies(df['RMO'], prefix='RMO').astype(int)
+    df = pd.concat([df, encodage], axis=1)
 
 
     # Calcul de la somme et création d'une nouvelle colonne "Somme"
     df[nom_colonne] = df[colonne_4] + df[colonne_5]
-    df["score_comprehension"] = df["Recommandation"].apply(
+    df["score_comprehension reco"] = df["Recommandation"].apply(
         lambda t: score_comprehension(t)["score_global_comprehension"])
+    df["score_comprehension PA"] = df["Plan d'actions "].apply(
+        lambda t: score_comprehension(str(t))["score_global_comprehension"] if pd.notnull(t) else 0
+    )
 
 
     # Calcul vectorisé
     df["nbr_jour_realisation"] = (df["Échéance initiale"] - df["Date d'émission rapport"]).dt.days
+    # nbr de jour de cloture
+    df["nbr_jour_cloture"] = (df["Date de clôture"] - df["Date d'émission rapport"]).dt.days
 
     # Appliquer la fonction
     df["nbr_mois"] = difference_mois(df["Date d'émission rapport"], df["Échéance initiale"])
@@ -403,7 +441,8 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     # Extraire le mois sous forme de nombre (1 à 12)
     df["mois_emission"] = df["Date d'émission rapport"].dt.month
 
-    df["criticite_code"] = df["Criticité reco"].map(mapping_criticite)
+    df["criticite_class"] = df["Criticité reco"].map(mapping_criticite)
+    df["statut_class"] = df["Statut de mise en œuvre"].map(mapping_statut)
 
     # Fonction pour colorier la nouvelle colonne
     def colorier(val):
@@ -414,7 +453,7 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
 
     styled_df = df.style.applymap(colorier,
                                   subset=[nom_colonne, "Recommandation",
-                                          "nbr_jour_realisation","mois_emission"])
+                                          "nbr_jour_cloture","mois_emission","score_comprehension PA","Nb. Reports"])
 
     st.success(
         f"Colonne '{[nom_colonne, "Recommandation","nbr_jour_realisation"]}' ajoutée avec la somme de {colonnes_numeriques[:2]}"
