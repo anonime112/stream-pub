@@ -10,7 +10,7 @@ import os
 import unicodedata
 import re
 from function import score_comprehension,extraire_taches_regex_spacy,compter_verbes_action_avances,detecter_modalites,calculer_densite_ambiguite_lexicale,extraire_actions_ou_procedures
-
+import io
 ##################################################################
 ### Configure App
 ##################################################################
@@ -455,7 +455,7 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     #                            num_rows="dynamic",
     #                            use_container_width=True)
 
-    return styled_df
+    return df
 
 
 def display_watchlist_card(ticker, symbol_name, last_price, change_pct, open):
@@ -820,6 +820,26 @@ st.markdown("""
 st.subheader("analyse  de donnees  :")
 
 ddf = ajouter_colonne_calcul(dfs)
+
+# Création du fichier Excel dans un buffer mémoire
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    ddf.to_excel(writer, index=False, sheet_name='donnees')
+
+# Remettre le curseur du buffer au début
+output.seek(0)
+# Convertir en CSV avec UTF-8 BOM + ; comme séparateur
+# csv_buffer = io.StringIO()
+# ddf.to_csv(csv_buffer, sep=';', index=False, encoding='utf-8-sig')
+# csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
+
+# Bouton de téléchargement
+st.download_button(
+    label="📥 Télécharger le fichier CSV",
+    data=output,
+    file_name="donnees_calculees.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
 
 with st.container(border=True):
     st.html(f'<span class="watchlist_analyse"></span>')

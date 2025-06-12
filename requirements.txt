@@ -7,3 +7,4 @@ language-tool-python
 numpy
 spacy
 textstat
+ XlsxWriter
