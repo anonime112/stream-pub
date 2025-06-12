@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 import os
 import unicodedata
 import re
-from function import score_comprehension
+from function import score_comprehension,extraire_taches_regex_spacy,compter_verbes_action_avances,detecter_modalites,calculer_densite_ambiguite_lexicale,extraire_actions_ou_procedures
 
 ##################################################################
 ### Configure App
@@ -345,48 +345,6 @@ def analyse_line(excel_file):
     columns = df.columns
 
 
-def afficher_types_colonnes(df: pd.DataFrame):
-    for col in df.columns:
-        col_type = df[col].dtype
-        st.write(f"### Colonne : `{col}` (type attendu : {col_type})")
-
-        for i, val in enumerate(df[col]):
-            val_type = type(val).__name__
-            match = "❌"
-
-            # Gestion NaN
-            if pd.isna(val):
-                match = "⚠️ NaN"
-
-            # Chaîne de caractères
-            elif pd.api.types.is_object_dtype(col_type):
-                if isinstance(val, str):
-                    match = "✅"
-
-            # Numériques
-            elif pd.api.types.is_float_dtype(col_type):
-                if isinstance(val, float):
-                    match = "✅"
-
-            elif pd.api.types.is_integer_dtype(col_type):
-                if isinstance(val, int):
-                    match = "✅"
-
-            # Booléen
-            elif pd.api.types.is_bool_dtype(col_type):
-                if isinstance(val, bool):
-                    match = "✅"
-
-            # Dates / Horodatage
-            elif pd.api.types.is_datetime64_any_dtype(col_type):
-                if isinstance(val, (pd.Timestamp, datetime)):
-                    match = "✅"
-
-            st.write(
-                f"Ligne {i} - Valeur : `{val}` (type réel : {val_type}) ➤ Correspondance : {match}"
-            )
-
-
 def formulaire_par_colonne(df: pd.DataFrame, ligne_index: int = 0):
     st.write(f"### Formulaire pour la ligne {ligne_index}")
 
@@ -440,7 +398,25 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
 
     # Extraire le mois sous forme de nombre (1 à 12)
     df["mois_emission"] = df["Date d'émission rapport"].dt.month
-
+    
+    df["nbr_de_tache_reco"] = df["Recommandation"].apply(
+        lambda t: extraire_actions_ou_procedures(t)["nb_phrase"])
+    df["nbr_de_tache_PA"] = df["Plan d'actions "].apply(
+        lambda t: extraire_actions_ou_procedures(str(t))["nb_phrase"])
+     
+    df["difficulte"] = df["Recommandation"].apply(
+        lambda t: extraire_actions_ou_procedures(t)["difficulte"])
+    df["complexite"] = df["Plan d'actions "].apply(
+        lambda t: extraire_actions_ou_procedures(str(t))["complexite"])
+    
+    df["nbr_verbe_PA"] = df["Plan d'actions "].apply(
+        lambda t: compter_verbes_action_avances((str(t))))
+    df["nbr_modalite_PA"] = df["Plan d'actions "].apply(
+        lambda t: detecter_modalites(str(t))["nbr"])
+    df["nbr_ambiguite_PA"] = df["Plan d'actions "].apply(
+        lambda t: calculer_densite_ambiguite_lexicale(str(t)))
+    
+    
     df["criticite_class"] = df["Criticité reco"].map(mapping_criticite)
     df["statut_class"] = df["Statut de mise en œuvre"].map(mapping_statut)
 
@@ -452,7 +428,7 @@ def ajouter_colonne_calcul(df: pd.DataFrame, nom_colonne="Score Total"):
     cols = st.columns([6, 1])
 
     styled_df = df.style.applymap(colorier,
-                                  subset=[nom_colonne, "Recommandation",
+                                  subset=[nom_colonne, "Recommandation","nbr_de_tache_reco",
                                           "nbr_jour_cloture","mois_emission","score_comprehension PA","Nb. Reports"])
 
     st.success(

@@ -1,9 +1,91 @@
 import language_tool_python
 import spacy
 import textstat
+import re
 
 nlp = spacy.load("fr_core_news_sm")
 tool = language_tool_python.LanguageTool('fr')
+
+
+modalites_regex = [
+    r"\bsi\b", r"\blorsque\b", r"\baprès\b", r"\bà condition que\b",
+    r"\ben cas de\b", r"\bsous réserve\b", r"\bdu moment que\b",
+    r"\baussitôt que\b", r"\bdès que\b"
+]
+
+verbes_etat = {
+    "être", "sembler", "paraître", "devenir", "rester", "demeurer", "avoir l'air"
+,
+ "passer",
+	"constituer",
+	"représenter",
+"appartenir"
+}
+
+def compter_verbes_action_avances(text: str) -> int:
+    doc = nlp(text)
+    count = 0
+
+    i = 0
+    while i < len(doc):
+        token = doc[i]
+
+        # Vérifie si c'est un verbe
+        if token.pos_ == "VERB":
+            # Cas particulier pour l'expression verbale "avoir l'air"
+            if token.lemma_ == "avoir" and i + 1 < len(doc) and doc[i + 1].text.lower() == "l'air":
+                i += 2  # On saute "avoir" + "l'air", considéré comme verbe d’état
+                continue
+
+            lemme = token.lemma_.lower()
+
+            # Si ce n’est pas un verbe d’état
+            if lemme not in verbes_etat:
+                # Vérifie la présence d'un sujet ou d'un objet
+                has_subject = any(child.dep_ == "nsubj" for child in token.children)
+                has_object = any(child.dep_ in ("obj", "dobj") for child in token.children)
+
+                if has_subject or has_object:
+                    count += 1
+
+        i += 1
+
+    return count
+
+
+def detecter_modalites(text):
+    """
+    Détecte les modalités (conditionnelles, temporelles, restrictives) dans un texte.
+    Combine une approche par regex et une analyse syntaxique via spaCy.
+    
+    Retourne :
+    - le nombre de modalités détectées
+    - la liste des expressions trouvées
+    """
+    # Analyse avec spaCy
+    doc = nlp(text)
+    
+    # 1. Par expressions régulières
+    texte_lower = text.lower()
+    termes_trouves = []
+    for pattern in modalites_regex:
+        matches = re.findall(pattern, texte_lower)
+        termes_trouves.extend(matches)
+    
+    # 2. Par analyse syntaxique (détection des subordonnants conditionnels)
+    for token in doc:
+        if token.dep_ in ["mark", "advcl"] and token.text.lower() in {"si", "lorsque", "quand", "à condition", "après"}:
+            termes_trouves.append(token.text.lower())
+
+    # Nettoyer les doublons
+    termes_uniques = list(set(termes_trouves))
+    
+    return {
+        "nbr": len(termes_uniques),
+        "liste": termes_uniques,
+
+    } 
+
 
 mots_abstraits = [
     "gérer", "organiser", "coordonner", "définir", "établir", "optimiser",
@@ -36,6 +118,14 @@ verbes_facilitants = [
     "mettre à jour", "implémenter", "élaborer", "contrôler", "étayer"
 ]
 
+termes_flous = {
+    "approprié", "adéquat", "suffisant", "rapide", "fiable", "efficace",
+    "optimisé", "correct", "important", "requis", "significatif", "amélioré",
+    "satisfaisant", "pertinent", "conforme", "en temps voulu", "appropriée",
+    "adapté", "utile", "standard", "normal", "prévu", "bon", "mauvais", "meilleur",  "correctement", "efficacement", "de manière appropriée", "optimal",
+    "pertinent", "approprié", "bon fonctionnement"
+}
+
 ressources_keywords = [
     "ordinateur", "logiciel", "application", "formulaire", "fichier",
     "document", "base de données", "matériel", "réseau", "support",
@@ -48,16 +138,169 @@ subordonnants = [
 ]
 
 texte = """
-Nous recommandons aux :
-1.	Risk Manager de s’assurer que les provisions pour risques et charges intégrées dans l’EP22, sont liées à des cas irréversibles de pertes opérationnelles;
-2.	Mettre en place un contrôle conjoint réalisé par le Risk Manager (DRC) et la Direction Financière et comptable (DFC) préalablement à la transmission de l’état prudentiel EP22.
+ Mettre en place un dispositif transversal d’identification précoce et de prévention de la fraude. > DACP
+ Mettre en place un dispositif d’alerte risque de fraude intégrant les scénarii de fraude et des contrôles applicatifs associés (exemple : vérification des soldes et paramétrage de la séparation des tâches).  > DACP
+ Elaborer un plan de formation/sensibilisation les sujets de fraudes dans la stratégie globale de gestion des risques.  > DACP
+ Faire appel à un tiers spécialisé pour l’audit de la configuration des critères l'alerte mis en place par le prestataire.  > DACP
 """
 
 
-def evaluer_faisabilite(tache):
-    a = evaluer_complexite(tache)
-    b = evaluer_difficulte_tache(tache)
-    a = evaluer_complexite(tache)
+
+
+
+def evaluer_comprehension(texte):
+    doc = nlp(texte)
+    nb_phrases = len(list(doc.sents))
+    nb_mots = len(doc)
+    moyenne_longueur = nb_mots / nb_phrases if nb_phrases else 1
+    lisibilite = textstat.flesch_reading_ease(texte)
+    fautes = len(tool.check(texte))
+
+    score = (
+        0.4 * (1 - min(moyenne_longueur / 25, 1)) +  # phrases courtes = plus clair
+        0.3 * min(lisibilite / 100, 1) +             # meilleure lisibilité
+        0.3 * (1 - min(fautes / 5, 1))               # moins de fautes = plus compréhensible
+    )
+    return max(0.0, min(score, 1.0))
+
+
+
+def calculer_densite_ambiguite_lexicale(text: str) -> float:
+    """
+    Calcule la densité d’ambiguïté lexicale (nb de termes flous / nb total de tokens).
+    Retourne une valeur entre 0 et 1 (ou plus si le texte est très court et très flou).
+    """
+    doc = nlp(text)
+    nb_tokens = len(doc)
+
+    if nb_tokens == 0:
+        return 0.0
+
+    nb_flous = sum(1 for token in doc if token.lemma_.lower() in termes_flous)
+    densite = nb_flous / nb_tokens
+
+    return densite
+
+
+
+
+def extraire_actions_ou_procedures(texte: str) -> list[str]:
+    lignes = texte.splitlines()
+    actions = []
+    complexite=0
+    difficulte=0
+
+    # motif pour les sous-tâches comme (i), (ii)
+    motif_sous_taches = re.compile(r"\(\s?[ivxlcdm]+\s?\)\s*", re.IGNORECASE)
+    # motif pour les bullets
+    motif_puce = re.compile(r"^\s*[-•*•\d.]+\s*")
+    motif_etape = re.compile(
+    r"^(E?tape\s*\d+\s*:?|\bEape\d+\s*:?)",
+    re.IGNORECASE
+)
+
+    for ligne in lignes:
+        ligne_originale = ligne.strip()
+        if not ligne_originale:
+            continue
+
+        # Gestion des sous-tâches
+        if motif_sous_taches.search(ligne_originale):
+            sous_taches = re.split(motif_sous_taches, ligne_originale)
+            intro = sous_taches[0].strip(": ")
+            for sous in sous_taches[1:]:
+                if sous.strip():
+                    actions.append(f"{intro} : {sous.strip()}")
+            continue
+
+        # Suppression de la puce éventuelle
+        ligne = motif_puce.sub("", ligne_originale)
+        # Suppression de la puce éventuelle
+        ligne = motif_etape.sub("", ligne_originale)
+
+
+        doc = nlp(ligne)
+        phrase = list(doc.sents)[0] if list(doc.sents) else nlp(ligne)
+
+        # Cas 1 : Verbe détecté dans la phrase (devoir, infinitif, impératif, etc.)
+        if any(
+            token.lemma_ == "devoir"
+            or "Inf" in token.morph.get("VerbForm")
+            or "Imp" in token.morph.get("VerbForm")
+            or token.pos_ == "VERB"
+            for token in phrase
+        ):
+            actions.append(ligne)
+            continue
+
+        # Cas 2 : Phrase courte commençant par un nom (action implicite)
+        tokens = [token for token in phrase if not token.is_punct]
+        if tokens and len(tokens) <= 7 and tokens[0].pos_ == "NOUN":
+            actions.append(ligne)
+            continue
+        
+    for t in actions:
+        complexite = complexite+evaluer_complexite(t)
+        difficulte = difficulte+evaluer_difficulte_tache(t)
+ 
+        
+
+    return {
+        "longueur_moyenne": actions,
+        "nb_phrase":len(actions) ,
+         "complexite":complexite,
+          "difficulte":difficulte ,
+      
+    }
+
+
+
+def extraire_taches_regex_spacy(text: str) -> list[str]:
+    lignes = text.splitlines()
+    taches = []
+
+    motif_tache_directe = re.compile(
+        r"^(?:-|\*||•|\d+\.)?\s*(?:Mettre en place|Sensibiliser|Faire appel|Définir|Revue|Accroître|Élaborer|Veiller à|Interfacer|Fixer|Établir|Formaliser|Inclure|Créer|Déployer|Embarquer|Revoir|Élargir|Assurer|Renforcer|Doit|Doivent|Devra|Traiter|Procéder|Déterminer)",
+        re.IGNORECASE
+    )
+
+    motif_sous_taches = re.compile(r"\(\s?[ivxlcdm]+\s?\)\s", re.IGNORECASE)  # (i) (ii) (iii)...
+
+    for ligne in lignes:
+        ligne = ligne.strip()
+        if not ligne:
+            continue
+
+        # Cas 1 : Ligne avec plusieurs sous-tâches entre (i)...(ii)...(iii)...
+        if motif_sous_taches.search(ligne):
+            sous_taches = re.split(r"\(\s?[ivxlcdm]+\s?\)\s*", ligne)
+            phrase_intro = sous_taches[0].strip(": \n")
+            for sous in sous_taches[1:]:
+                if sous.strip():
+                    taches.append(f"{phrase_intro} : {sous.strip()}")
+            continue
+
+        # Cas 2 : ligne directe qui commence par un verbe d'action
+        if motif_tache_directe.search(ligne):
+            taches.append(ligne)
+            continue
+
+        # Cas 3 : analyse grammaticale
+        doc = nlp(ligne)
+        for phrase in doc.sents:
+            texte_phrase = phrase.text.strip()
+            doc_phrase = nlp(texte_phrase)
+            for token in doc_phrase:
+                formes = token.morph.get("VerbForm")
+                if token.lemma_ == "devoir" or "Inf" in formes or "Imp" in formes:
+                    taches.append(texte_phrase)
+                    break
+
+    return {
+        "longueur_moyenne": taches,
+        "nb_phrase":len(taches) ,
+      
+    }
 
 
 def normaliser(val, max_val):
@@ -105,23 +348,6 @@ def score_comprehension(texte: str) -> dict:
         "score_lisibilite": score_lisibilite,
         "score_global_comprehension": score_global
     }
-
-
-def evaluer_comprehension(texte):
-    doc = nlp(texte)
-    nb_phrases = len(list(doc.sents))
-    nb_mots = len(doc)
-    moyenne_longueur = nb_mots / nb_phrases if nb_phrases else 1
-    lisibilite = textstat.flesch_reading_ease(texte)
-    fautes = len(tool.check(texte))
-
-    score = (
-        0.4 *
-        (1 - min(moyenne_longueur / 25, 1)) +  # phrases courtes = plus clair
-        0.3 * min(lisibilite / 100, 1) +  # meilleure lisibilité
-        0.3 * (1 - min(fautes / 5, 1))  # moins de fautes = plus compréhensible
-    )
-    return max(0.0, min(score, 1.0))
 
 
 def evaluer_complexite(tache):
@@ -221,25 +447,6 @@ def AnalyseTache(taches):
               or "Aucune trouvée")
 
 
-def extraire_taches(texte: str) -> list[str]:
-    """
-    Extrait les tâches d'un texte en détectant les phrases qui contiennent
-    des verbes à l'infinitif ou à l'impératif.
-    """
-    doc = nlp(texte)
-
-    taches = []
-
-    for phrase in doc.sents:
-        phrase_doc = nlp(phrase.text)
-        for token in phrase_doc:
-            if token.pos_ == "VERB" and token.morph.get("VerbForm") in [[
-                    "Inf"
-            ], ["Imp"]]:
-                taches.append(phrase.text.strip())
-                break  # une seule détection de verbe suffit
-
-    return taches
 
 
 def evaluer_difficulte_tache(tache: str) -> dict:
@@ -288,9 +495,10 @@ def evaluer_difficulte_tache(tache: str) -> dict:
     return score
 
 
-taches = extraire_taches(texte)
 
-for t in taches:
+taches1 = extraire_taches_regex_spacy(texte)
+
+for t in taches1:
     s = evaluer_complexite(t)
     niveau = "Faible" if s < 0.3 else "Moyenne" if s < 0.7 else "Élevée"
     print(f"🧾 Tâche : {t}")
@@ -312,5 +520,8 @@ for m in comp:
     print(f"{m}: {comp[m]}")
 print(f"------------------------------------------------------------")
 print(f"------analyse de la tache------")
+print(len(taches1))
+print(taches1["nb_phrase"])
 # AnalyseTache(taches)
+
 
